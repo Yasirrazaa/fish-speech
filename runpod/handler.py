@@ -164,40 +164,90 @@ async def process_request(job_input):
             )
         )
         
-        # Stream responses from agent
+        # Stream responses from agent with retry logic
         text_response = ""
         audio_data = None
         
+        # Initialize a fresh agent client for this request
+        # This helps prevent stale connections
+        try:
+            # Close existing agent client if it exists
+            if hasattr(agent, 'client'):
+                await agent.client.aclose()
+            
+            # Create a new client with increased timeout
+            import httpx
+            agent.client = httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=60.0),  # Increased timeout
+                limits=httpx.Limits(
+                    max_keepalive_connections=5,
+                    max_connections=10,
+                    keepalive_expiry=30.0
+                ),
+            )
+            logger.info("Created fresh HTTPX client for this request")
+        except Exception as e:
+            logger.warning(f"Could not refresh agent client: {str(e)}")
+        
         logger.info("Streaming response from agent...")
         
-        # In the e2e_webui.py example, the stream method is called with these exact parameters:
-        # agent.stream(
-        #    sys_audio_data,  # System audio data
-        #    audio_data,      # User audio data
-        #    sr,              # Sample rate
-        #    1,               # Num channels
-        #    chat_ctx={...}   # Chat context
-        # )
+        # Implement retry logic for stream
+        max_retries = 3
+        retry_count = 0
         
-        # Note: We're not handling user voice input in this API, only text
-        async for event in agent.stream(
-            sys_audio_data,     # System audio data for voice cloning
-            None,               # User audio data (None since we're using text)
-            sys_sr,             # Sample rate from the loaded audio or default
-            1,                  # Num channels (always 1 for RunPod API)
-            chat_ctx={
-                "messages": state.conversation,
-                "added_sysaudio": state.added_sysaudio,
-            },
-        ):
-            if event.type == FishE2EEventType.TEXT_SEGMENT:
-                text_response += event.text
-                logger.debug(f"Text segment received: {event.text}")
-            elif event.type == FishE2EEventType.SPEECH_SEGMENT:
-                audio_data = event.frame.data
-                logger.debug(f"Speech segment received: {len(audio_data)} bytes")
-            elif event.type == FishE2EEventType.USER_CODES:
-                logger.debug(f"User VQ codes received")
+        while retry_count < max_retries:
+            try:
+                # Stream with the agent
+                async for event in agent.stream(
+                    sys_audio_data,     # System audio data for voice cloning
+                    None,               # User audio data (None since we're using text)
+                    sys_sr,             # Sample rate from the loaded audio or default
+                    1,                  # Num channels (always 1 for RunPod API)
+                    chat_ctx={
+                        "messages": state.conversation,
+                        "added_sysaudio": state.added_sysaudio,
+                    },
+                ):
+                    if event.type == FishE2EEventType.TEXT_SEGMENT:
+                        text_response += event.text
+                        logger.debug(f"Text segment received: {event.text}")
+                    elif event.type == FishE2EEventType.SPEECH_SEGMENT:
+                        audio_data = event.frame.data
+                        logger.debug(f"Speech segment received: {len(audio_data)} bytes")
+                    elif event.type == FishE2EEventType.USER_CODES:
+                        logger.debug(f"User VQ codes received")
+                
+                # If we got here, streaming completed successfully
+                break
+                
+            except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout, 
+                    httpx.ReadError, httpx.ConnectError) as e:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    logger.error(f"Failed to stream after {max_retries} attempts: {str(e)}")
+                    if text_response:
+                        # If we have a partial text response, let's continue with that
+                        logger.warning(f"Using partial text response of {len(text_response)} chars")
+                    else:
+                        # If we don't even have text, raise the error
+                        raise Exception(f"Network error when communicating with API server: {str(e)}")
+                else:
+                    logger.warning(f"Network error (attempt {retry_count}/{max_retries}): {str(e)}")
+                    await asyncio.sleep(1)  # Brief pause before retrying
+                    
+                    # Recreate the client for the next attempt
+                    try:
+                        await agent.client.aclose()
+                        agent.client = httpx.AsyncClient(
+                            timeout=httpx.Timeout(300.0, connect=60.0),
+                            limits=httpx.Limits(
+                                max_keepalive_connections=5,
+                                max_connections=10,
+                                keepalive_expiry=30.0
+                            ),
+                        )
+                    except Exception as client_err:
+                        logger.warning(f"Could not refresh client: {str(client_err)}")
         
         # Store assistant response in conversation
         state.conversation.append(
@@ -233,6 +283,13 @@ async def process_request(job_input):
         logger.info(f"Response generated: {len(text_response)} chars of text, " + 
                     (f"{len(audio_data)} bytes of audio" if audio_data else "no audio"))
         
+        # Make sure to close the client
+        try:
+            if hasattr(agent, 'client'):
+                await agent.client.aclose()
+        except Exception as e:
+            logger.warning(f"Error closing client: {str(e)}")
+            
         return {
             "status": "success", 
             "output": result
@@ -243,6 +300,13 @@ async def process_request(job_input):
         error_trace = traceback.format_exc()
         logger.error(f"Error processing request: {error_message}\n{error_trace}")
         
+        # Clean up in case of error
+        try:
+            if 'agent' in locals() and hasattr(agent, 'client'):
+                await agent.client.aclose()
+        except Exception:
+            pass
+            
         return {
             "status": "error",
             "output": {
