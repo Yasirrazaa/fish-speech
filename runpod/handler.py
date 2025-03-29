@@ -168,7 +168,7 @@ def get_agent(max_retries: int = 30, retry_delay: int = 2):
     return _AGENT
 
 
-async def process_request(job_input: Dict[str, Any]) -> Dict[str, Any]:
+async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
     """Process a text-to-speech request using FishE2EAgent.
     
     Args:
@@ -183,16 +183,10 @@ async def process_request(job_input: Dict[str, Any]) -> Dict[str, Any]:
             - max_new_tokens (int, optional): Max tokens to generate (default: 512)
             - max_text_length (int, optional): Max input text length (default: 1000)
             
-    Returns:
-        Dict[str, Any]: Response containing:
-            status: "success" or "error"
-            output: {
-                text: Generated text response
-                audio_base64: Base64 encoded audio data
-                audio_format: Format of the audio
-                sample_rate: Audio sample rate (44100 Hz)
-                history: Conversation history
-            }
+    Yields:
+        Dict[str, Any]: Stream of response chunks containing:
+            type: "text" or "audio"
+            content: Text segment or base64-encoded audio
             
     Raises:
         ValueError: For validation errors
@@ -402,12 +396,6 @@ async def process_request(job_input: Dict[str, Any]) -> Dict[str, Any]:
                     logger.warning(f"Could not refresh client: {str(client_err)}")
 
         # Prepare final result
-        result = {
-            "text": current_text,
-            "history": state.get_history()
-        }
-
-        # Process complete audio if available
         if audio_segments:
             import numpy as np
             
@@ -415,10 +403,17 @@ async def process_request(job_input: Dict[str, Any]) -> Dict[str, Any]:
             wav_header = wav_chunk_header(sample_rate=44100, bit_depth=16, channels=1)
             complete_audio = wav_header + result_audio
             
-            # Include base64 encoded WAV for direct use in web applications
-            result["audio_base64"] = base64.b64encode(complete_audio).decode('utf-8')
-            result["audio_format"] = output_format
-            result["sample_rate"] = 44100
+            # Generate a final summary result chunk
+            final_result = {
+                "type": "summary", 
+                "content": {
+                    "text": current_text,
+                    "audio_base64": base64.b64encode(complete_audio).decode('utf-8'),
+                    "audio_format": output_format,
+                    "sample_rate": 44100,
+                    "history": state.get_history()
+                }
+            }
             
             # Also include raw audio array for further processing
             audio_array = np.frombuffer(result_audio, dtype=np.int16)
@@ -433,9 +428,17 @@ async def process_request(job_input: Dict[str, Any]) -> Dict[str, Any]:
             
             # Include vq_codes if available for advanced clients
             if vq_codes_history:
-                result["vq_codes"] = vq_codes_history
+                final_result["content"]["vq_codes"] = vq_codes_history
+                
+            # Yield the final summary instead of returning
+            yield final_result
         else:
             logger.warning("No audio generated in response")
+            # Yield a warning message
+            yield {
+                "type": "warning",
+                "content": "No audio could be generated for this response"
+            }
 
         # Clean up client connection
         try:
@@ -443,11 +446,6 @@ async def process_request(job_input: Dict[str, Any]) -> Dict[str, Any]:
                 await agent.client.aclose()
         except Exception as e:
             logger.warning(f"Error closing client: {str(e)}")
-
-        return {
-            "status": "success",
-            "output": result
-        }
 
     except Exception as e:
         error_message = str(e)
@@ -461,9 +459,10 @@ async def process_request(job_input: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
             
-        return {
-            "status": "error",
-            "output": {
+        # Yield error information instead of returning
+        yield {
+            "type": "error",
+            "content": {
                 "error": error_message,
                 "trace": error_trace
             }
@@ -511,36 +510,108 @@ def handler(event):
         )
     
     try:
-        # Handle event loop configuration
-        if os.environ.get("RUNPOD_USE_NEST_ASYNCIO", "0") == "1":
-            try:
-                import nest_asyncio
-                nest_asyncio.apply()
-                result = asyncio.get_event_loop().run_until_complete(process_request(input_data))
-            except ImportError:
-                logger.warning("nest_asyncio not available, falling back to new event loop")
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                result = asyncio.run(process_request(input_data))
+        # Check if streaming is requested
+        streaming = input_data.get('streaming', True)
+        
+        # If streaming is enabled, use RunPod's generator response
+        if streaming and not os.environ.get("RUNPOD_LOCAL_TEST") == "1":
+            # Return a generator wrapper for streaming
+            async def process_streaming():
+                try:
+                    async for chunk in process_request(input_data):
+                        yield chunk
+                except Exception as e:
+                    yield {
+                        "type": "error",
+                        "content": str(e)
+                    }
+            
+            return runpod.serverless.utils.rp_generator(process_streaming())
+        
+        # For non-streaming requests, collect all outputs
         else:
-            try:
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                result = asyncio.run(process_request(input_data))
-            except RuntimeError as e:
-                if "This event loop is already running" in str(e):
-                    logger.warning("Event loop already running, using thread-based approach")
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(lambda: asyncio.run(process_request(input_data)))
-                        result = future.result()
-                else:
-                    raise
+            result_data = {
+                "text": "",
+                "audio_base64": None,
+                "audio_format": input_data.get('format', 'wav'),
+                "sample_rate": 44100,
+                "history": []
+            }
+            
+            # Handle event loop configuration
+            if os.environ.get("RUNPOD_USE_NEST_ASYNCIO", "0") == "1":
+                try:
+                    import nest_asyncio
+                    nest_asyncio.apply()
+                    
+                    # Collect all chunks from the generator
+                    async def collect_results():
+                        async for chunk in process_request(input_data):
+                            if chunk["type"] == "text":
+                                result_data["text"] += chunk["content"]
+                            elif chunk["type"] == "audio" and not result_data["audio_base64"]:
+                                result_data["audio_base64"] = chunk["content"]
+                        return {"status": "success", "output": result_data}
+                    
+                    result = asyncio.get_event_loop().run_until_complete(collect_results())
+                except ImportError:
+                    logger.warning("nest_asyncio not available, falling back to new event loop")
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    
+                    async def collect_results():
+                        async for chunk in process_request(input_data):
+                            if chunk["type"] == "text":
+                                result_data["text"] += chunk["content"]
+                            elif chunk["type"] == "audio" and not result_data["audio_base64"]:
+                                result_data["audio_base64"] = chunk["content"]
+                        return {"status": "success", "output": result_data}
+                    
+                    result = asyncio.run(collect_results())
+            else:
+                try:
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    
+                    async def collect_results():
+                        async for chunk in process_request(input_data):
+                            if chunk["type"] == "text":
+                                result_data["text"] += chunk["content"]
+                            elif chunk["type"] == "audio" and not result_data["audio_base64"]:
+                                result_data["audio_base64"] = chunk["content"]
+                        return {"status": "success", "output": result_data}
+                    
+                    result = asyncio.run(collect_results())
+                except RuntimeError as e:
+                    if "This event loop is already running" in str(e):
+                        logger.warning("Event loop already running, using thread-based approach")
+                        import concurrent.futures
+                        
+                        def run_async_collection():
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            
+                            async def collect_results():
+                                nonlocal result_data
+                                async for chunk in process_request(input_data):
+                                    if chunk["type"] == "text":
+                                        result_data["text"] += chunk["content"]
+                                    elif chunk["type"] == "audio" and not result_data["audio_base64"]:
+                                        result_data["audio_base64"] = chunk["content"]
+                                return {"status": "success", "output": result_data}
+                            
+                            return loop.run_until_complete(collect_results())
+                        
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_async_collection)
+                            result = future.result()
+                    else:
+                        raise
 
-        return {
-            "id": job_id,
-            **result
-        }
+            return {
+                "id": job_id,
+                **result
+            }
 
     except ValueError as e:
         # Handle validation errors
