@@ -8,6 +8,8 @@ import time
 import asyncio
 import base64
 import traceback
+import io
+import wave
 from typing import Dict, Any
 from loguru import logger
 
@@ -18,6 +20,19 @@ sys.path.append("/app/fish-speech")
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 logger.add("/var/log/runpod_handler.log", rotation="100 MB", retention="1 week")
+
+# Helper function for creating WAV headers - copied from e2e_webui.py
+def wav_chunk_header(sample_rate=44100, bit_depth=16, channels=1):
+    buffer = io.BytesIO()
+
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(bit_depth // 8)
+        wav_file.setframerate(sample_rate)
+
+    wav_header_bytes = buffer.getvalue()
+    buffer.close()
+    return wav_header_bytes
 
 try:
     import runpod
@@ -106,16 +121,17 @@ async def process_request(job_input):
         
         # Process system audio if provided (base64 encoded)
         sys_audio_data = None
+        sys_sr = 44100  # Default sample rate
+        
         if job_input.get('system_audio'):
             try:
                 import numpy as np
-                import io
                 import soundfile as sf
                 
                 # Decode base64 audio
                 audio_bytes = base64.b64decode(job_input['system_audio'])
                 with io.BytesIO(audio_bytes) as audio_buffer:
-                    sys_audio_data, sample_rate = sf.read(audio_buffer)
+                    sys_audio_data, sys_sr = sf.read(audio_buffer)
                     # Convert to float32 if needed
                     if sys_audio_data.dtype != np.float32:
                         sys_audio_data = sys_audio_data.astype(np.float32)
@@ -124,9 +140,10 @@ async def process_request(job_input):
                     if len(sys_audio_data.shape) > 1 and sys_audio_data.shape[1] > 1:
                         sys_audio_data = np.mean(sys_audio_data, axis=1)
                 
-                logger.info(f"Loaded system audio: {sys_audio_data.shape}")
+                logger.info(f"Loaded system audio: {sys_audio_data.shape} at {sys_sr}Hz")
             except Exception as e:
                 logger.error(f"Error processing system audio: {str(e)}")
+                sys_audio_data = None
         
         # Process system message if provided
         if sys_text:
@@ -152,11 +169,22 @@ async def process_request(job_input):
         audio_data = None
         
         logger.info("Streaming response from agent...")
+        
+        # In the e2e_webui.py example, the stream method is called with these exact parameters:
+        # agent.stream(
+        #    sys_audio_data,  # System audio data
+        #    audio_data,      # User audio data
+        #    sr,              # Sample rate
+        #    1,               # Num channels
+        #    chat_ctx={...}   # Chat context
+        # )
+        
+        # Note: We're not handling user voice input in this API, only text
         async for event in agent.stream(
-            sys_audio_data=sys_audio_data,
-            user_audio_data=None,
-            sample_rate=44100,
-            num_channels=1,
+            sys_audio_data,     # System audio data for voice cloning
+            None,               # User audio data (None since we're using text)
+            sys_sr,             # Sample rate from the loaded audio or default
+            1,                  # Num channels (always 1 for RunPod API)
             chat_ctx={
                 "messages": state.conversation,
                 "added_sysaudio": state.added_sysaudio,
@@ -164,10 +192,12 @@ async def process_request(job_input):
         ):
             if event.type == FishE2EEventType.TEXT_SEGMENT:
                 text_response += event.text
-                logger.debug(f"Text segment: {event.text}")
+                logger.debug(f"Text segment received: {event.text}")
             elif event.type == FishE2EEventType.SPEECH_SEGMENT:
                 audio_data = event.frame.data
                 logger.debug(f"Speech segment received: {len(audio_data)} bytes")
+            elif event.type == FishE2EEventType.USER_CODES:
+                logger.debug(f"User VQ codes received")
         
         # Store assistant response in conversation
         state.conversation.append(
@@ -186,19 +216,25 @@ async def process_request(job_input):
         # Include audio if available, converting to bytes for JSON serialization
         if audio_data is not None:
             import numpy as np
-            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-            result["audio"] = audio_array.tolist()
-            # Also provide base64 encoded audio for direct use in web applications
-            audio_bytes = audio_data.tobytes()
-            result["audio_base64"] = base64.b64encode(audio_bytes).decode('utf-8')
+            
+            # Create WAV header and append audio data for complete WAV file
+            wav_header = wav_chunk_header(sample_rate=44100, bit_depth=16, channels=1)
+            complete_audio = wav_header + audio_data.tobytes()
+            
+            # Include base64 encoded WAV for direct use in web applications
+            result["audio_base64"] = base64.b64encode(complete_audio).decode('utf-8')
             result["audio_format"] = "wav"
             result["sample_rate"] = 44100
+            
+            # Also include raw audio array
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            result["audio"] = audio_array.tolist()
         
         logger.info(f"Response generated: {len(text_response)} chars of text, " + 
                     (f"{len(audio_data)} bytes of audio" if audio_data else "no audio"))
         
         return {
-            "status": "success",
+            "status": "success", 
             "output": result
         }
 
