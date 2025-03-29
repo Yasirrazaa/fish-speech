@@ -27,7 +27,7 @@ except ImportError as e:
     logger.error(f"Import error: {str(e)}")
     logger.error("Attempting to install missing packages...")
     import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "runpod==1.7.0"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "runpod==1.7.7"])
     import runpod
     from fish_speech.utils.schema import ServeMessage, ServeTextPart, ServeVQPart
     from tools.fish_e2e import FishE2EAgent, FishE2EEventType
