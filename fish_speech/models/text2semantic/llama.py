@@ -73,7 +73,7 @@ class BaseModelArgs:
         self.head_dim = self.dim // self.n_head
 
     @staticmethod
-    def from_pretrained(path: str):
+    def from_pretrained(path: str) -> DualARModelArgs | NaiveModelArgs:
         path = Path(path)
 
         if path.is_dir():

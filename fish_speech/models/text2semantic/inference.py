@@ -15,7 +15,6 @@ import torch._inductor.config
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoTokenizer
-
 from fish_speech.conversation import (
     CODEBOOK_PAD_TOKEN_ID,
     Conversation,
@@ -952,12 +951,15 @@ def launch_thread_safe_queue_agent(
     input_queue = queue.Queue()
     init_event = threading.Event()
 
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
-    config = BaseModelArgs.from_pretrained(checkpoint_path)
+    # Clean the path to remove potential trailing slashes
+    cleaned_checkpoint_path = str(checkpoint_path).rstrip('/')
+
+    tokenizer = AutoTokenizer.from_pretrained(cleaned_checkpoint_path)
+    config = BaseModelArgs.from_pretrained(cleaned_checkpoint_path)
 
     def worker():
         model, decode_one_token = load_model(
-            checkpoint_path, device, precision, compile=compile, is_agent=True
+            cleaned_checkpoint_path, device, precision, compile=compile, is_agent=True
         )
 
         with torch.device(device):
