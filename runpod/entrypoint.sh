@@ -2,7 +2,7 @@
 
 # Start API server in background
 echo "Starting API server..."
-python -m tools.api_server --llama-checkpoint-path /app/fish-speech/checkpoints/fish-speech-1.5/ --mode agent --compile 2>&1 | tee /var/log/api_server.log &
+python -m tools.api_server --llama-checkpoint-path /app/fish-speech/checkpoints/fish-agent-v0.1-3b --mode agent --compile 2>&1 | tee /var/log/api_server.log &
 
 API_PID=$!
 
