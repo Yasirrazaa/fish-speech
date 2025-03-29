@@ -1,0 +1,53 @@
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    portaudio19-dev \
+    git \
+    curl \
+    tree \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone the repository (better than copying for complete structure)
+RUN git clone https://github.com/fishaudio/fish-speech.git /app/fish-speech
+
+WORKDIR /app/fish-speech
+COPY runpod /app/fish-speech/runpod/
+RUN ls
+# Install project dependencies using pip from pyproject.toml
+RUN pip install --upgrade pip
+RUN pip install ".[stable]"  # Install with stable extras from pyproject.toml
+
+# Additional dependencies that might be needed (runpod and hugginface-hub)
+RUN pip install huggingface-hub runpod==1.7.7
+
+# Create cache and logs directories
+RUN mkdir -p /app/cache && mkdir -p /app/logs
+
+# Download models
+RUN mkdir -p /app/fish-speech/checkpoints
+RUN huggingface-cli download fishaudio/fish-agent-v0.1-3b --local-dir /app/fish-speech/checkpoints/fish-agent-v0.1-3b
+RUN huggingface-cli download fishaudio/fish-speech-1.5 --local-dir /app/fish-speech/checkpoints/fish-speech-1.5
+# Verify model files
+RUN tree
+
+# Set environment variables
+EXPOSE 8080
+ENV PYTHONPATH=/app/fish-speech
+ENV MODEL_PATH=/app/fish-speech/checkpoints
+ENV LLAMA_CHECKPOINT_PATH=/app/fish-speech/checkpoints/fish-speech-1.5/
+ENV DECODER_CHECKPOINT_PATH=/app/fish-speech/checkpoints/fish-speech-1.5/firefly-gan-vq-fsq-8x1024-21hz-generator.pth
+ENV DECODER_CONFIG_NAME=base
+ENV MODE=agent
+ENV HALF=true
+ENV COMPILE=true
+ENV ASR_ENABLED=false
+
+COPY runpod/entrypoint.sh /app/fish-speech/entrypoint.sh
+RUN cp /app/fish-speech/checkpoints/fish-speech-1.5/tokenizer.tiktoken /app/fish-speech/checkpoints/fish-agent-v0.1-3b/tokenizer.tiktoken
+
+RUN chmod +x /app/fish-speech/entrypoint.sh
+CMD ["/app/fish-speech/entrypoint.sh"]
