@@ -27,7 +27,7 @@ except ImportError as e:
     logger.error(f"Import error: {str(e)}")
     logger.error("Attempting to install missing packages...")
     import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "runpod==1.7.7"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "runpod==1.7.0"])
     import runpod
     from fish_speech.utils.schema import ServeMessage, ServeTextPart, ServeVQPart
     from tools.fish_e2e import FishE2EAgent, FishE2EEventType
@@ -232,9 +232,27 @@ def handler(event):
                 "output": {"error": "No input provided"}
             }
         
-        # Run the async processing in an event loop
-        loop = asyncio.get_event_loop()
-        result = loop.run_until_complete(process_request(input_data))
+        # Fix for "This event loop is already running" error
+        # Create a new event loop for each request instead of using the default one
+        try:
+            # Create a new event loop for this handler
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            result = asyncio.run(process_request(input_data))
+        except RuntimeError:
+            # If we still have an issue with the event loop, try a different approach
+            logger.warning("Event loop error detected, using alternative approach")
+            # Use nest_asyncio as a fallback if available
+            try:
+                import nest_asyncio
+                nest_asyncio.apply()
+                result = asyncio.get_event_loop().run_until_complete(process_request(input_data))
+            except ImportError:
+                # If nest_asyncio is not available, use a thread-based approach
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(lambda: asyncio.run(process_request(input_data)))
+                    result = future.result()
         
         return {
             "id": job_id,
@@ -298,6 +316,21 @@ def local_test():
 
 
 if __name__ == "__main__":
+    # Try to install nest_asyncio if not available (helps with event loop issues)
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+    except ImportError:
+        logger.info("Installing nest_asyncio to help with event loop issues...")
+        try:
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "nest_asyncio"])
+            import nest_asyncio
+            nest_asyncio.apply()
+            logger.info("nest_asyncio installed and applied successfully")
+        except Exception as e:
+            logger.warning(f"Could not install or apply nest_asyncio: {str(e)}")
+    
     # Add a delay to ensure the API server is ready
     logger.info("Starting RunPod serverless handler...")
     logger.info("Waiting for API server to initialize...")
