@@ -47,7 +47,7 @@ ENV COMPILE=true
 ENV ASR_ENABLED=false
 
 COPY runpod/entrypoint.sh /app/fish-speech/entrypoint.sh
-COPY checkpoints/fish-speech-1.5/tokenizer.tiktoken /app/fish-speech/checkpoints/fish-agent-v0.1-3b/tokenizer.tiktoken
+COPY /app/fish-speech/checkpoints/fish-speech-1.5/tokenizer.tiktoken /app/fish-speech/checkpoints/fish-agent-v0.1-3b/tokenizer.tiktoken
 
 RUN chmod +x /app/fish-speech/entrypoint.sh
 CMD ["/app/fish-speech/entrypoint.sh"]
