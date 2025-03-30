@@ -142,12 +142,24 @@ def get_agent(max_retries: int = 30, retry_delay: int = 2):
             retry_count = 0
             while retry_count < max_retries:
                 try:
+                    # Try POST request instead of GET since the endpoint returns 405 for GET
                     import urllib.request
-                    with urllib.request.urlopen("http://localhost:8080/v1/health", timeout=5) as response:
+                    req = urllib.request.Request(
+                        "http://localhost:8080/v1/health",
+                        method="POST",  # Change from GET to POST
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as response:
                         if response.status == 200:
                             logger.info("API server is ready")
                             break
                         logger.warning(f"API server health check failed: {response.status}")
+                except urllib.error.HTTPError as e:
+                    # Handle 405 Method Not Allowed specifically
+                    if e.code == 405:
+                        logger.info("API server is ready (responded with 405, which means endpoint exists)")
+                        break
+                    logger.warning(f"Health check HTTP error: {e.code} - {e.reason}")
                 except Exception as e:
                     logger.warning(f"Health check attempt {retry_count + 1}/{max_retries} failed: {str(e)}")
                 
