@@ -46,7 +46,8 @@ dependencies = [
     "ormsgpack",
     "livekit",
     "livekit-agents",
-    "runpod==1.7.7"
+    "runpod==1.7.7",
+    "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0rc",
 ]
 
 [project.optional-dependencies]
