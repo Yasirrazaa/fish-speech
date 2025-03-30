@@ -730,4 +730,6 @@ if __name__ == "__main__":
     else:
         # Start the RunPod serverless handler
         logger.info("Starting RunPod serverless handler")
-        runpod.serverless.start({"handler": handler})
+        runpod.serverless.start({
+        "handler": handler,
+        "return_aggregate_stream": True,})
