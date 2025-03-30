@@ -24,6 +24,7 @@ except ImportError:
         import subprocess
         logger.info("Installing livekit-rtc module...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "livekit"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0rc"])
         import livekit.rtc as rtc
     except Exception as e:
         logger.error(f"Failed to install livekit-rtc: {e}")
