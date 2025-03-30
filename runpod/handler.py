@@ -24,7 +24,6 @@ except ImportError:
         import subprocess
         logger.info("Installing livekit-rtc module...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "livekit"])
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0rc"])
         import livekit.rtc as rtc
     except Exception as e:
         logger.error(f"Failed to install livekit-rtc: {e}")
@@ -550,28 +549,54 @@ def handler(event):
         
         # If streaming is enabled, use RunPod's generator response
         if streaming and not os.environ.get("RUNPOD_LOCAL_TEST") == "1":
-            # Return a generator wrapper for streaming
-            async def process_streaming():
+            # Collect stream chunks into the output format
+            async def collect_stream():
+                chunks = []
+                audio_data = None
+                text_content = ""
+                
                 try:
                     async for chunk in process_request(input_data):
-                        yield chunk
+                        if chunk["type"] == "text":
+                            text_content += chunk["content"]
+                        elif chunk["type"] == "audio":
+                            audio_data = chunk["content"]  # Keep the latest audio chunk
+                        elif chunk["type"] == "summary":
+                            # Return final summary directly
+                            return {"output": chunk["content"]}
+                        chunks.append(chunk)
                 except Exception as e:
-                    yield {
-                        "type": "error",
-                        "content": str(e)
-                    }
-            
-            return {"result": process_streaming()}
+                    return {"output": {
+                        "error": str(e),
+                        "status": "error"
+                    }}
 
+                # Format final output
+                return {
+                    "output": {
+                        "text": text_content,
+                        "audio": audio_data,
+                        "chunks": chunks,
+                        "status": "success"
+                    }
+                }
+
+            # Return results in RunPod format
+            loop = asyncio.get_event_loop()
+            final_result = loop.run_until_complete(collect_stream())
+            return final_result
         
         # For non-streaming requests, collect all outputs
         else:
+            # Format output data according to RunPod requirements
             result_data = {
-                "text": "",
-                "audio_base64": None,
-                "audio_format": input_data.get('format', 'wav'),
-                "sample_rate": 44100,
-                "history": []
+                "output": {
+                    "text": "",
+                    "audio": None,
+                    "audio_format": input_data.get('format', 'wav'),
+                    "sample_rate": 44100,
+                    "status": "success"
+                }
             }
             
             # Handle event loop configuration
@@ -581,43 +606,50 @@ def handler(event):
                     nest_asyncio.apply()
                     
                     # Collect all chunks from the generator
-                    async def collect_results():
+                    async def collect_nonstreaming():
                         async for chunk in process_request(input_data):
                             if chunk["type"] == "text":
-                                result_data["text"] += chunk["content"]
-                            elif chunk["type"] == "audio" and not result_data["audio_base64"]:
-                                result_data["audio_base64"] = chunk["content"]
-                        return {"status": "success", "output": result_data}
+                                result_data["output"]["text"] += chunk["content"]
+                            elif chunk["type"] == "audio" and not result_data["output"]["audio"]:
+                                result_data["output"]["audio"] = chunk["content"]
+                            elif chunk["type"] == "summary":
+                                # Use summary content if available
+                                return {"output": chunk["content"]}
+                        return result_data
                     
-                    result = asyncio.get_event_loop().run_until_complete(collect_results())
+                    result = asyncio.get_event_loop().run_until_complete(collect_nonstreaming())
                 except ImportError:
                     logger.warning("nest_asyncio not available, falling back to new event loop")
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
                     
-                    async def collect_results():
+                    async def collect_nonstreaming():
                         async for chunk in process_request(input_data):
                             if chunk["type"] == "text":
-                                result_data["text"] += chunk["content"]
-                            elif chunk["type"] == "audio" and not result_data["audio_base64"]:
-                                result_data["audio_base64"] = chunk["content"]
-                        return {"status": "success", "output": result_data}
+                                result_data["output"]["text"] += chunk["content"]
+                            elif chunk["type"] == "audio" and not result_data["output"]["audio"]:
+                                result_data["output"]["audio"] = chunk["content"]
+                            elif chunk["type"] == "summary":
+                                return {"output": chunk["content"]}
+                        return result_data
                     
-                    result = asyncio.run(collect_results())
+                    result = asyncio.run(collect_nonstreaming())
             else:
                 try:
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
                     
-                    async def collect_results():
+                    async def collect_nonstreaming():
                         async for chunk in process_request(input_data):
                             if chunk["type"] == "text":
-                                result_data["text"] += chunk["content"]
-                            elif chunk["type"] == "audio" and not result_data["audio_base64"]:
-                                result_data["audio_base64"] = chunk["content"]
-                        return {"status": "success", "output": result_data}
+                                result_data["output"]["text"] += chunk["content"]
+                            elif chunk["type"] == "audio" and not result_data["output"]["audio"]:
+                                result_data["output"]["audio"] = chunk["content"]
+                            elif chunk["type"] == "summary":
+                                return {"output": chunk["content"]}
+                        return result_data
                     
-                    result = asyncio.run(collect_results())
+                    result = asyncio.run(collect_nonstreaming())
                 except RuntimeError as e:
                     if "This event loop is already running" in str(e):
                         logger.warning("Event loop already running, using thread-based approach")
@@ -627,16 +659,18 @@ def handler(event):
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
                             
-                            async def collect_results():
+                            async def collect_nonstreaming():
                                 nonlocal result_data
                                 async for chunk in process_request(input_data):
                                     if chunk["type"] == "text":
-                                        result_data["text"] += chunk["content"]
-                                    elif chunk["type"] == "audio" and not result_data["audio_base64"]:
-                                        result_data["audio_base64"] = chunk["content"]
-                                return {"status": "success", "output": result_data}
+                                        result_data["output"]["text"] += chunk["content"]
+                                    elif chunk["type"] == "audio" and not result_data["output"]["audio"]:
+                                        result_data["output"]["audio"] = chunk["content"]
+                                    elif chunk["type"] == "summary":
+                                        return {"output": chunk["content"]}
+                                return result_data
                             
-                            return loop.run_until_complete(collect_results())
+                            return loop.run_until_complete(collect_nonstreaming())
                         
                         with concurrent.futures.ThreadPoolExecutor() as executor:
                             future = executor.submit(run_async_collection)
@@ -732,5 +766,6 @@ if __name__ == "__main__":
         # Start the RunPod serverless handler
         logger.info("Starting RunPod serverless handler")
         runpod.serverless.start({
-        "handler": handler,
-        "return_aggregate_stream": True})
+            "handler": handler,
+            "return_aggregate_stream": True,
+                                 })
