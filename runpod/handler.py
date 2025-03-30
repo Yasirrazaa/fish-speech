@@ -561,7 +561,7 @@ def handler(event):
                         "content": str(e)
                     }
             
-            return runpod.serverless.utils.rp_generator(process_streaming())
+            return process_streaming()
         
         # For non-streaming requests, collect all outputs
         else:
