@@ -15,6 +15,28 @@ import httpx
 from typing import Dict, Any, AsyncGenerator, Union
 from loguru import logger
 
+# Import the missing rtc module
+try:
+    import livekit.rtc as rtc
+except ImportError:
+    # Attempt to install livekit.rtc if missing
+    try:
+        import subprocess
+        logger.info("Installing livekit-rtc module...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "livekit-rtc"])
+        import livekit.rtc as rtc
+    except Exception as e:
+        logger.error(f"Failed to install livekit-rtc: {e}")
+        # Provide a fallback implementation if necessary
+        class MockRTC:
+            class AudioFrame:
+                def __init__(self, data, samples_per_channel, sample_rate, num_channels):
+                    self.data = data
+                    self.samples_per_channel = samples_per_channel
+                    self.sample_rate = sample_rate
+                    self.num_channels = num_channels
+        rtc = MockRTC()
+
 # Add proper path for imports
 sys.path.append("/app/fish-speech")
 
