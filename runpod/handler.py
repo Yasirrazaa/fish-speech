@@ -561,7 +561,8 @@ def handler(event):
                         "content": str(e)
                     }
             
-            return process_streaming()
+            return {"result": process_streaming()}
+
         
         # For non-streaming requests, collect all outputs
         else:
