@@ -23,7 +23,7 @@ except ImportError:
     try:
         import subprocess
         logger.info("Installing livekit-rtc module...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "livekit-rtc"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "livekit"])
         import livekit.rtc as rtc
     except Exception as e:
         logger.error(f"Failed to install livekit-rtc: {e}")
@@ -79,15 +79,15 @@ def wav_chunk_header(sample_rate=44100, bit_depth=16, channels=1):
 
 try:
     import runpod
-    from fish_speech.utils.schema import ServeMessage, ServeTextPart, ServeVQPart
+    from tools.schema import ServeMessage, ServeTextPart, ServeVQPart
     from tools.fish_e2e import FishE2EAgent, FishE2EEventType
 except ImportError as e:
     logger.error(f"Import error: {str(e)}")
     logger.error("Attempting to install missing packages...")
     import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "runpod==1.7.0"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "runpod==1.7.7"])
     import runpod
-    from fish_speech.utils.schema import ServeMessage, ServeTextPart, ServeVQPart
+    from tools.schema import ServeMessage, ServeTextPart, ServeVQPart
     from tools.fish_e2e import FishE2EAgent, FishE2EEventType
 
 
