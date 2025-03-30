@@ -45,6 +45,7 @@ dependencies = [
     "silero-vad",
     "ormsgpack",
     "livekit",
+    "livekit-agents",
     "runpod==1.7.7"
 ]
 
