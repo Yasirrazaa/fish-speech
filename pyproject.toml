@@ -44,6 +44,8 @@ dependencies = [
     "opencc-python-reimplemented==0.1.7",
     "silero-vad",
     "ormsgpack",
+    "livekit",
+    "runpod==1.7.7"
 ]
 
 [project.optional-dependencies]
