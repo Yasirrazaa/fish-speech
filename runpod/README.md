@@ -48,7 +48,7 @@ def clone_voice(text, reference_audio_path):
             "input": {
                 "message": text,
                 "system_audio": audio_base64,  # Voice reference
-                "system_message": "Match the speaking style of the reference audio",
+                "tts": true,  # Enable direct text-to-speech synthesis
                 "format": "wav"
             }
         },
@@ -143,6 +143,7 @@ history = response.json()["output"]["history"]
 |-----------|------|----------|-------------|
 | message | string | Yes | Text to synthesize |
 | system_message | string | No | Assistant behavior prompt |
+| tts | bool | No | Enable direct text-to-speech synthesis (default: false) |
 | system_audio | string | No | Base64 reference audio |
 | streaming | bool | No | Enable streaming (default: true) |
 | format | string | No | 'wav' (streaming)/'mp3'/'flac' |

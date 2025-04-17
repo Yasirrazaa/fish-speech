@@ -25,7 +25,9 @@ def main():
     parser.add_argument("--conversation-id", type=str, help="Conversation ID for continuing a conversation")
     parser.add_argument("--timeout", type=int, default=300, help="Timeout in seconds")
     parser.add_argument("--local", action="store_true", help="Test with local handler.py instead of RunPod endpoint")
-    
+    parser.add_argument("--direct-synthesis", action="store_true", help="Directly synthesize the message using system_audio, skipping LLM generation")
+    parser.add_argument("--tts", action="store_true", help="Use TTS mode (simple text-to-speech without assistant behavior)")
+
     args = parser.parse_args()
     
     # Create output directory if it doesn't exist
@@ -95,7 +97,12 @@ def main():
     
     if args.system:
         payload["input"]["system_message"] = args.system
-    
+
+    # Enable TTS mode if requested
+    if args.tts:
+        payload["input"]["tts"] = True
+        print("🗣️ TTS mode enabled: Will directly synthesize text with reference voice.")
+
     if args.conversation_id:
         payload["input"]["conversation_id"] = args.conversation_id
     
@@ -103,6 +110,9 @@ def main():
         with open(args.system_audio, "rb") as f:
             audio_data = f.read()
             payload["input"]["system_audio"] = base64.b64encode(audio_data).decode("utf-8")
+
+    if args.direct_synthesis:
+        payload["input"]["direct_synthesis"] = True
     
     # API endpoint
     endpoint_url = f"https://api.runpod.ai/v2/{args.endpoint}/run"

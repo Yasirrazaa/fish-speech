@@ -289,13 +289,20 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                 logger.error(f"Error processing system audio: {str(e)}")
                 sys_audio_data = None
         
-        # Process system message if provided
-        if sys_text:
+        # Override system message if direct voice cloning is enabled
+        tts = job_input.get('tts', False)
+        if tts:
+            sys_text = "You are a voice cloning assistant. Your task is to repeat the user's message exactly as provided.No additional text should be added."
+            logger.info("🗣️ Direct voice cloning mode enabled: Setting specific system message.")
+            state.added_systext = True # Mark that we've added a system text
+            state.append_message(ServeTextPart(text=sys_text), role="system")
+        # Process system message if provided and not overridden by direct cloning
+        elif sys_text:
             logger.info(f"Adding system message: {sys_text[:50]}...")
             state.added_systext = True
             state.append_message(ServeTextPart(text=sys_text), role="system")
         else:
-            # Add default system message for Fish-Speech
+            # Add default system message for Fish-Speech if no system message was provided
             default_system_message = os.getenv(
                 "DEFAULT_SYSTEM_MESSAGE",
                 'You are a voice assistant designed by Fish Audio, providing end-to-end voice interaction for seamless user experience.'
@@ -309,14 +316,26 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
         state.append_message(ServeTextPart(text=text_input), role="user")
 
         # Configure generation parameters
-        gen_config = {
-            "max_new_tokens": job_input.get('max_new_tokens', 512),
-            "temperature": job_input.get('temperature', 0.7),
-            "top_p": job_input.get('top_p', 0.9),
-            "repetition_penalty": job_input.get('repetition_penalty', 1.2),
-            "early_stop_threshold": job_input.get('early_stop_threshold', 0.5),
-            "chunk_length": job_input.get('chunk_length', 200),
-        }
+        if tts:
+            # Use more conservative parameters for exact cloning
+            gen_config = {
+                "max_new_tokens": job_input.get('max_new_tokens', 512),
+                "temperature": job_input.get('temperature', 0.1),  # Lower temperature for more deterministic output
+                "top_p": job_input.get('top_p', 0.1),  # Lower top_p for more focused sampling
+                "repetition_penalty": job_input.get('repetition_penalty', 1.0),  # No repetition penalty needed
+                "early_stop_threshold": job_input.get('early_stop_threshold', 1.0),  # Higher threshold for early stopping
+                "chunk_length": job_input.get('chunk_length', 200),
+            }
+        else:
+            # Use standard parameters for regular voice assistant mode
+            gen_config = {
+                "max_new_tokens": job_input.get('max_new_tokens', 512),
+                "temperature": job_input.get('temperature', 0.7),
+                "top_p": job_input.get('top_p', 0.9),
+                "repetition_penalty": job_input.get('repetition_penalty', 1.2),
+                "early_stop_threshold": job_input.get('early_stop_threshold', 0.5),
+                "chunk_length": job_input.get('chunk_length', 200),
+            }
         
         # Configure HTTPX client with proper timeout and retry settings
         try:
