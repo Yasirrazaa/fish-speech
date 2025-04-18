@@ -15,7 +15,7 @@ API_PID=$!
 
 # Wait for API server to be ready
 echo "Waiting for API server to be ready..."
-MAX_RETRIES=30
+MAX_RETRIES=60
 RETRY_COUNT=0
 while ! curl -s -X POST http://localhost:8080/v1/health > /dev/null; do
     if ! kill -0 $API_PID 2>/dev/null; then
