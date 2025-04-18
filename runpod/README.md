@@ -2,6 +2,7 @@
 
 This guide explains how to use the Fish Speech API endpoint (ID: g7oisc3won8ng8) in your applications.
 Runpod Serverless Guide : https://docs.runpod.io/serverless/endpoints/job-operations
+
 ## Technical Overview
 
 Fish Speech processes requests through several steps:
@@ -9,6 +10,16 @@ Fish Speech processes requests through several steps:
 2. Language model for text-to-semantic token generation
 3. VQGAN decoder for speech synthesis
 4. Stream management for real-time responses
+
+## Operation Modes
+
+Fish Speech supports two operation modes:
+
+### 1. Agent Mode (Default)
+In this mode, the service functions as a conversational AI that can conduct multi-turn dialogues with voice responses matching your reference audio.
+
+### 2. TTS Mode (Direct Voice Cloning)
+This mode provides direct Text-to-Speech synthesis with your reference voice, skipping the conversational aspects. This is ideal for pure voice cloning applications where you simply want text spoken in a specific voice.
 
 ## Basic Usage
 
@@ -35,8 +46,9 @@ response = requests.post(
 
 ## Voice Cloning
 
+### Agent Mode Voice Cloning
 ```python
-def clone_voice(text, reference_audio_path):
+def clone_voice_agent(text, reference_audio_path):
     # Read and encode reference audio
     with open(reference_audio_path, "rb") as f:
         audio_bytes = f.read()
@@ -48,8 +60,32 @@ def clone_voice(text, reference_audio_path):
             "input": {
                 "message": text,
                 "system_audio": audio_base64,  # Voice reference
-                "tts": true,  # Enable direct text-to-speech synthesis
                 "format": "wav"
+            }
+        },
+        headers={"Authorization": f"Bearer {API_KEY}"}
+    )
+    return response.json()
+```
+
+### Direct TTS Voice Cloning (Recommended for Pure Voice Cloning)
+```python
+def clone_voice_tts(text, reference_audio_path):
+    # Read and encode reference audio
+    with open(reference_audio_path, "rb") as f:
+        audio_bytes = f.read()
+    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+    
+    response = requests.post(
+        ENDPOINT,
+        json={
+            "input": {
+                "message": text,
+                "system_audio": audio_base64,  # Voice reference
+                "tts": True,  # Enable direct TTS mode
+                "format": "wav",
+                "temperature": 0.7,  # Optional: Control variability
+                "normalize": True    # Optional: Improve pronunciation of numbers
             }
         },
         headers={"Authorization": f"Bearer {API_KEY}"}
@@ -99,6 +135,42 @@ def stream_audio(text, reference_audio=None):
         for chunk in response.iter_content(chunk_size=1024):
             if chunk:
                 stream.write(chunk)
+    finally:
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+```
+
+## Using the Test Client
+
+The repository includes a test client for easier interaction with the Fish Speech API:
+
+```bash
+# Test with Agent mode (conversational)
+python runpod/test_client.py --endpoint YOUR_ENDPOINT_ID --api-key YOUR_API_KEY \
+  --message "Hello, how are you today?" --system-audio path/to/reference.wav
+
+# Test with direct TTS mode (recommended for pure voice cloning)
+python runpod/test_client.py --endpoint YOUR_ENDPOINT_ID --api-key YOUR_API_KEY \
+  --message "Text to be spoken in the reference voice" --system-audio path/to/reference.wav --tts
+
+# Test locally
+python runpod/test_client.py --local --message "Hello world" --system-audio path/to/reference.wav
+```
+
+## Advanced Configuration
+
+You can configure the server to start in either "agent" or "tts" mode as the default:
+
+```bash
+# Start in TTS mode (optimized for voice cloning)
+MODE=tts ./entrypoint.sh
+
+# Start in agent mode (for conversational AI)
+MODE=agent ./entrypoint.sh  # or just ./entrypoint.sh
+```
+
+Even when running in one mode, you can still access the other mode's functionality by setting the `tts` parameter in your requests.
     finally:
         stream.close()
         p.terminate()

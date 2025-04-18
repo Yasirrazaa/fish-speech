@@ -53,6 +53,9 @@ DECODER_CONFIG = os.getenv("DECODER_CONFIG_NAME", "base")
 USE_HALF = os.getenv("HALF", "true").lower() == "true"
 USE_COMPILE = os.getenv("COMPILE", "true").lower() == "true"
 ASR_ENABLED = os.getenv("ASR_ENABLED", "false").lower() == "true"
+# Check server mode from environment variable
+SERVER_MODE = os.getenv("SERVER_MODE", "tts")
+logger.info(f"Server mode: {SERVER_MODE}")
 
 # Helper functions for audio handling
 def create_audio_frame(data: bytes, samples_per_channel: int) -> rtc.AudioFrame:
@@ -79,7 +82,7 @@ def wav_chunk_header(sample_rate=44100, bit_depth=16, channels=1):
 
 try:
     import runpod
-    from tools.schema import ServeMessage, ServeTextPart, ServeVQPart
+    from tools.schema import ServeMessage, ServeTextPart, ServeVQPart, ServeTTSRequest, ServeReferenceAudio
     from tools.fish_e2e import FishE2EAgent, FishE2EEventType
 except ImportError as e:
     logger.error(f"Import error: {str(e)}")
@@ -87,7 +90,7 @@ except ImportError as e:
     import subprocess
     subprocess.check_call([sys.executable, "-m", "pip", "install", "runpod==1.7.7"])
     import runpod
-    from tools.schema import ServeMessage, ServeTextPart, ServeVQPart
+    from tools.schema import ServeMessage, ServeTextPart, ServeVQPart, ServeTTSRequest, ServeReferenceAudio
     from tools.fish_e2e import FishE2EAgent, FishE2EEventType
 
 
@@ -203,19 +206,20 @@ def get_agent(max_retries: int = 30, retry_delay: int = 2):
 
 
 async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
-    """Process a text-to-speech request using FishE2EAgent.
+    """Process a text-to-speech request using either direct TTS endpoint or FishE2EAgent.
     
     Args:
         job_input: Dictionary containing:
             - message (str): Text to convert to speech
             - system_message (str, optional): System prompt to control behavior
-            - system_audio (str, optional): Base64 encoded reference audio
+            - system_audio (str, optional): Base64 encoded reference audio for voice cloning
             - conversation_id (str, optional): ID to maintain context
             - streaming (bool, optional): Enable streaming response (default: True)
             - format (str, optional): Audio format (wav/mp3/flac, default: wav)
             - temperature (float, optional): Sampling temperature (default: 0.7)
             - max_new_tokens (int, optional): Max tokens to generate (default: 512)
             - max_text_length (int, optional): Max input text length (default: 1000)
+            - tts (bool, optional): Force using TTS endpoint regardless of server mode
             
     Yields:
         Dict[str, Any]: Stream of response chunks containing:
@@ -228,6 +232,101 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
         Exception: For unexpected errors
     """
     try:
+        # Check if we should use direct TTS mode either due to server mode or explicit request
+        use_tts_endpoint = SERVER_MODE == "tts" or job_input.get('tts', False)
+        
+        # Get input parameters
+        text_input = job_input.get('message')
+        if not text_input:
+            raise ValueError("No message provided in the input")
+            
+        # Process system audio if provided (base64 encoded)
+        system_audio_b64 = job_input.get('system_audio')
+        
+        # If using direct TTS mode
+        if use_tts_endpoint:
+            logger.info("Using direct TTS endpoint for voice cloning...")
+            
+            if not system_audio_b64:
+                raise ValueError("No system_audio provided for TTS cloning")
+                
+            # Prepare HTTP client for TTS request
+            client = httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=60.0),
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+            )
+            
+            try:
+                # Decode base64 system audio first since it's base64 encoded from the request
+                decoded_audio = base64.b64decode(system_audio_b64)
+                
+                # Prepare TTS payload
+                tts_payload = {
+                    "text": text_input,
+                    "references": [{"audio": decoded_audio, "text": ""}],  # Raw binary audio data
+                    "streaming": False,
+                    "format": job_input.get('format', 'wav'),
+                    "temperature": job_input.get('temperature', 0.7),
+                    "top_p": job_input.get('top_p', 0.9),
+                    "repetition_penalty": job_input.get('repetition_penalty', 1.2),
+                    "max_new_tokens": job_input.get('max_new_tokens', 512),
+                    "normalize": job_input.get('normalize', True),  # Set to True by default for better results
+                    "use_memory_cache": "on-demand",
+                    "chunk_length": 200  # Add this parameter as it's required
+                }
+                
+                logger.info(f"Sending TTS request to endpoint for text: {text_input[:50]}...")
+                
+                # Make the request to the TTS endpoint
+                response = await client.post(
+                    "http://localhost:8080/v1/tts",
+                    json=tts_payload,
+                    headers={"Content-Type": "application/json"},
+                    follow_redirects=True  # Follow redirects if necessary
+                )
+                
+                # Handle unsuccessful responses
+                if response.status_code != 200:
+                    try:
+                        error_data = response.json()
+                        error_message = error_data.get('message', 'Unknown error')
+                    except:
+                        error_message = response.text
+                    logger.error(f"TTS endpoint error ({response.status_code}): {error_message}")
+                    raise RuntimeError(f"TTS endpoint failed with status {response.status_code}: {error_message}")
+                    
+                # Get the audio data from the response
+                audio_data = await response.aread()
+                
+                if not audio_data or len(audio_data) < 100:  # Check for very small responses that are likely errors
+                    raise RuntimeError(f"TTS endpoint returned empty or invalid response (size: {len(audio_data) if audio_data else 0} bytes)")
+                    
+                audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                logger.info(f"Successfully received {len(audio_data)} bytes of audio from TTS endpoint")
+                
+                # Return the complete result at once since we're not streaming in TTS mode
+                yield {
+                    "output": {
+                        "text": text_input,
+                        "audio_base64": audio_base64,
+                        "audio_format": tts_payload["format"],
+                        "sample_rate": 44100
+                    }
+                }
+                
+                # Clean up client
+                await client.aclose()
+                return
+                
+            except Exception as e:
+                # Clean up client in case of error
+                await client.aclose()
+                logger.error(f"Error using TTS endpoint: {str(e)}")
+                raise RuntimeError(f"Error using TTS endpoint: {str(e)}")
+        
+        # If not using TTS endpoint, use the agent as before (original code follows)
+        logger.info("Using FishE2EAgent for voice interaction...")
+        
         # Get the agent
         agent = get_agent()
         if agent is None:
@@ -289,20 +388,13 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                 logger.error(f"Error processing system audio: {str(e)}")
                 sys_audio_data = None
         
-        # Override system message if direct voice cloning is enabled
-        tts = job_input.get('tts', False)
-        if tts:
-            sys_text = "You are a voice cloning assistant. Your task is to repeat the user's message exactly as provided.No additional text should be added."
-            logger.info("🗣️ Direct voice cloning mode enabled: Setting specific system message.")
-            state.added_systext = True # Mark that we've added a system text
-            state.append_message(ServeTextPart(text=sys_text), role="system")
-        # Process system message if provided and not overridden by direct cloning
-        elif sys_text:
+        # Process system message if provided
+        if sys_text:
             logger.info(f"Adding system message: {sys_text[:50]}...")
             state.added_systext = True
             state.append_message(ServeTextPart(text=sys_text), role="system")
         else:
-            # Add default system message for Fish-Speech if no system message was provided
+            # Add default system message for Fish-Speech
             default_system_message = os.getenv(
                 "DEFAULT_SYSTEM_MESSAGE",
                 'You are a voice assistant designed by Fish Audio, providing end-to-end voice interaction for seamless user experience.'
@@ -316,26 +408,14 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
         state.append_message(ServeTextPart(text=text_input), role="user")
 
         # Configure generation parameters
-        if tts:
-            # Use more conservative parameters for exact cloning
-            gen_config = {
-                "max_new_tokens": job_input.get('max_new_tokens', 512),
-                "temperature": job_input.get('temperature', 0.1),  # Lower temperature for more deterministic output
-                "top_p": job_input.get('top_p', 0.1),  # Lower top_p for more focused sampling
-                "repetition_penalty": job_input.get('repetition_penalty', 1.0),  # No repetition penalty needed
-                "early_stop_threshold": job_input.get('early_stop_threshold', 1.0),  # Higher threshold for early stopping
-                "chunk_length": job_input.get('chunk_length', 200),
-            }
-        else:
-            # Use standard parameters for regular voice assistant mode
-            gen_config = {
-                "max_new_tokens": job_input.get('max_new_tokens', 512),
-                "temperature": job_input.get('temperature', 0.7),
-                "top_p": job_input.get('top_p', 0.9),
-                "repetition_penalty": job_input.get('repetition_penalty', 1.2),
-                "early_stop_threshold": job_input.get('early_stop_threshold', 0.5),
-                "chunk_length": job_input.get('chunk_length', 200),
-            }
+        gen_config = {
+            "max_new_tokens": job_input.get('max_new_tokens', 512),
+            "temperature": job_input.get('temperature', 0.7),
+            "top_p": job_input.get('top_p', 0.9),
+            "repetition_penalty": job_input.get('repetition_penalty', 1.2),
+            "early_stop_threshold": job_input.get('early_stop_threshold', 0.5),
+            "chunk_length": job_input.get('chunk_length', 200),
+        }
         
         # Configure HTTPX client with proper timeout and retry settings
         try:
