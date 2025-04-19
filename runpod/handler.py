@@ -12,6 +12,7 @@ import io
 import wave
 import re  # Added for question extraction
 import httpx
+import tempfile
 from typing import Dict, Any, AsyncGenerator, Union
 from loguru import logger
 
@@ -260,32 +261,32 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                 # Decode base64 system audio first since it's base64 encoded from the request
                 decoded_audio = base64.b64decode(system_audio_b64)
                 
-                # We need to re-encode as base64 for JSON serialization
-                audio_b64_for_json = base64.b64encode(decoded_audio).decode('utf-8')
+                # The TTS endpoint expects the audio as bytes in the JSON payload
+                # No need to write to a file, just use the decoded audio directly
                 
-                # Prepare TTS payload
+                # Prepare the JSON payload according to ServeTTSRequest schema
                 tts_payload = {
                     "text": text_input,
-                    "references": [{"audio": audio_b64_for_json, "text": ""}],  # Base64 encoded for JSON
-                    "streaming": False,
+                    "references": [{"audio": decoded_audio.hex(), "text": ""}],  # Send binary data as hex string
                     "format": job_input.get('format', 'wav'),
+                    "streaming": False,
                     "temperature": job_input.get('temperature', 0.7),
                     "top_p": job_input.get('top_p', 0.9),
                     "repetition_penalty": job_input.get('repetition_penalty', 1.2),
                     "max_new_tokens": job_input.get('max_new_tokens', 512),
-                    "normalize": job_input.get('normalize', True),  # Set to True by default for better results
+                    "normalize": job_input.get('normalize', True),
                     "use_memory_cache": "on-demand",
-                    "chunk_length": 200  # Add this parameter as it's required
+                    "chunk_length": 200
                 }
                 
                 logger.info(f"Sending TTS request to endpoint for text: {text_input[:50]}...")
                 
-                # Make the request to the TTS endpoint
+                # Make the request to the TTS endpoint as JSON
                 response = await client.post(
                     "http://localhost:8080/v1/tts",
                     json=tts_payload,
                     headers={"Content-Type": "application/json"},
-                    follow_redirects=True  # Follow redirects if necessary
+                    timeout=300.0
                 )
                 
                 # Handle unsuccessful responses
@@ -312,7 +313,7 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                     "output": {
                         "text": text_input,
                         "audio_base64": audio_base64,
-                        "audio_format": tts_payload["format"],
+                        "audio_format": job_input.get('format', 'wav'),
                         "sample_rate": 44100
                     }
                 }
@@ -651,42 +652,22 @@ def handler(event):
         
         # If streaming is enabled, use RunPod's generator response
         if streaming and not os.environ.get("RUNPOD_LOCAL_TEST") == "1":
-            # Collect stream chunks into the output format
-            async def collect_stream():
-                chunks = []
-                audio_data = None
-                text_content = ""
-                
+            # Return a generator wrapper for streaming
+            async def process_streaming():
                 try:
                     async for chunk in process_request(input_data):
-                        if chunk["type"] == "text":
-                            text_content += chunk["content"]
-                        elif chunk["type"] == "audio":
-                            audio_data = chunk["content"]  # Keep the latest audio chunk
-                        elif chunk["type"] == "summary":
-                            # Return final summary directly
-                            return {"output": chunk["content"]}
-                        chunks.append(chunk)
+                        yield chunk
                 except Exception as e:
-                    return {"output": {
-                        "error": str(e),
-                        "status": "error"
-                    }}
-
-                # Format final output
-                return {
-                    "output": {
-                        "text": text_content,
-                        "audio": audio_data,
-                        "chunks": chunks,
-                        "status": "success"
+                    yield {
+                        "type": "error",
+                        "content": {
+                            "error": str(e),
+                            "trace": traceback.format_exc()
+                        }
                     }
-                }
-
-            # Return results in RunPod format
-            loop = asyncio.get_event_loop()
-            final_result = loop.run_until_complete(collect_stream())
-            return final_result
+            
+            # Return generator wrapped in RunPod's expected format
+            return runpod.serverless.utils.rp_generator(process_streaming)
         
         # For non-streaming requests, collect all outputs
         else:
@@ -870,4 +851,4 @@ if __name__ == "__main__":
         runpod.serverless.start({
             "handler": handler,
             "return_aggregate_stream": True,
-                                 })
+        })
