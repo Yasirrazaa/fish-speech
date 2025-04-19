@@ -260,7 +260,6 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
             try:
                 # Decode base64 system audio first since it's base64 encoded from the request
                 decoded_audio = base64.b64decode(system_audio_b64)
-                audio_buffer = io.BytesIO(decoded_audio)
 
                 
                 # The TTS endpoint expects the audio as bytes in the JSON payload
@@ -269,7 +268,7 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                 # Prepare the JSON payload according to ServeTTSRequest schema
                 tts_payload = {
                     "text": text_input,
-                    "references": [{"audio": audio_buffer, "text": ""}], # Send base64 encoded audio
+                    "references": [{"audio": decoded_audio, "text": ""}], # Send base64 encoded audio
                     "format": job_input.get('format', 'wav'),
                     "streaming": False,
                     "temperature": job_input.get('temperature', 0.7),
