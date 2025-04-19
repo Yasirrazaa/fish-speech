@@ -652,22 +652,42 @@ def handler(event):
         
         # If streaming is enabled, use RunPod's generator response
         if streaming and not os.environ.get("RUNPOD_LOCAL_TEST") == "1":
-            # Return a generator wrapper for streaming
-            async def process_streaming():
+            # Collect stream chunks into the output format
+            async def collect_stream():
+                chunks = []
+                audio_data = None
+                text_content = ""
+                
                 try:
                     async for chunk in process_request(input_data):
-                        yield chunk
+                        if chunk["type"] == "text":
+                            text_content += chunk["content"]
+                        elif chunk["type"] == "audio":
+                            audio_data = chunk["content"]  # Keep the latest audio chunk
+                        elif chunk["type"] == "summary":
+                            # Return final summary directly
+                            return {"output": chunk["content"]}
+                        chunks.append(chunk)
                 except Exception as e:
-                    yield {
-                        "type": "error",
-                        "content": {
-                            "error": str(e),
-                            "trace": traceback.format_exc()
-                        }
+                    return {"output": {
+                        "error": str(e),
+                        "status": "error"
+                    }}
+
+                # Format final output
+                return {
+                    "output": {
+                        "text": text_content,
+                        "audio": audio_data,
+                        "chunks": chunks,
+                        "status": "success"
                     }
-            
-            # Return generator wrapped in RunPod's expected format
-            return runpod.serverless.utils.rp_generator(process_streaming)
+                }
+
+            # Return results in RunPod format
+            loop = asyncio.get_event_loop()
+            final_result = loop.run_until_complete(collect_stream())
+            return final_result
         
         # For non-streaming requests, collect all outputs
         else:
