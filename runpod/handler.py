@@ -267,7 +267,7 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                 # Prepare the JSON payload according to ServeTTSRequest schema
                 tts_payload = {
                     "text": text_input,
-                    "references": [{"audio": decoded_audio.hex(), "text": ""}],  # Send binary data as hex string
+                    "references": [{"audio": base64.b64encode(decoded_audio).decode('utf-8'), "text": ""}], # Send base64 encoded audio
                     "format": job_input.get('format', 'wav'),
                     "streaming": False,
                     "temperature": job_input.get('temperature', 0.7),
