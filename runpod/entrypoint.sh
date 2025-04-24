@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Get the server mode from environment variable or default to "tts"
-MODE=tts
+MODE=agent
 echo "Using server mode: $MODE"
 
 # Export the mode so handler.py can access it
@@ -9,7 +9,7 @@ export SERVER_MODE=$MODE
 
 # Start API server in background with the selected mode
 echo "Starting API server in $MODE mode..."
-python -m tools.api --listen 0.0.0.0:8080 --llama-checkpoint-path /app/fish-speech/checkpoints/fish-agent-v0.1-3b --decoder-checkpoint-path /app/fish-speech/checkpoints/fish-speech-1.5/firefly-gan-vq-fsq-8x1024-21hz-generator.pth --decoder-config-name firefly_gan_vq --mode tts --compile 2>&1 | tee /var/log/api_server.log &
+python -m tools.api --listen 0.0.0.0:8080 --llama-checkpoint-path /app/fish-speech/checkpoints/fish-agent-v0.1-3b --decoder-checkpoint-path /app/fish-speech/checkpoints/fish-speech-1.5/firefly-gan-vq-fsq-8x1024-21hz-generator.pth --decoder-config-name firefly_gan_vq --mode agent --compile 2>&1 | tee /var/log/api_server.log &
 
 API_PID=$!
 
