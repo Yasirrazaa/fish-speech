@@ -23,9 +23,11 @@ def main():
     parser.add_argument("--system-audio", type=str, help="Path to reference audio file for voice cloning")
     parser.add_argument("--output-dir", type=str, default="outputs", help="Directory to save outputs")
     parser.add_argument("--conversation-id", type=str, help="Conversation ID for continuing a conversation")
-    parser.add_argument("--timeout", type=int, default=300, help="Timeout in seconds")
+    parser.add_argument("--timeout", type=int, default=600, help="Timeout in seconds")
     parser.add_argument("--local", action="store_true", help="Test with local handler.py instead of RunPod endpoint")
     parser.add_argument("--tts", action="store_true", help="Force using TTS mode for direct voice cloning")
+    parser.add_argument("--streaming", action="store_true", help="Enable streaming response")
+    parser.add_argument("--format", type=str, default="wav", choices=["wav", "mp3", "flac"], help="Output audio format")
     
     args = parser.parse_args()
     
@@ -64,6 +66,14 @@ def main():
         # Add TTS flag if specified
         if args.tts:
             test_input["input"]["tts"] = True
+        
+        # Add streaming flag if specified
+        if args.streaming:
+            test_input["input"]["streaming"] = True
+        
+        if args.format:
+            test_input["input"]["format"] = args.format
+
         
         # Save test input to file
         with open("test_input.json", "w") as f:
@@ -112,6 +122,13 @@ def main():
     # Add TTS flag if specified
     if args.tts:
         payload["input"]["tts"] = True
+
+    # Add streaming flag if specified
+    if args.streaming:
+        payload["input"]["streaming"] = True
+    
+    if args.format:
+        payload["input"]["format"] = args.format
     
     # API endpoint
     endpoint_url = f"https://api.runpod.ai/v2/{args.endpoint}/run"
