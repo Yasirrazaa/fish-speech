@@ -278,9 +278,12 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                         logger.warning(f"[DEBUG] Not a valid WAV file or error reading WAV: {str(wav_err)}")
 
                 # Prepare the payload according to ServeTTSRequest schema - use raw bytes, not base64
+                # The key fix: Using the text input as the reference text for proper voice cloning
+                reference_text = job_input.get('reference_text', text_input)  # Use provided reference text or input text
+                
                 tts_payload = {
-                    "text": text_input,
-                    "references": [{"audio": audio_bytes, "text": ""}],  # Send raw bytes, not base64
+                    "prompt": text_input,  # Use prompt instead of text for TTS request
+                    "references": [{"audio": audio_bytes, "text": reference_text}],  # Include reference text
                     "format": job_input.get('format', 'wav'),
                     "streaming": False,
                     "temperature": job_input.get('temperature', 0.7),
@@ -304,7 +307,7 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                     headers={"Content-Type": "application/msgpack"},
                     timeout=300.0
                 )
-
+                
                 logger.info(f"Received response from TTS endpoint: {response}")
 
                 # Handle unsuccessful responses
