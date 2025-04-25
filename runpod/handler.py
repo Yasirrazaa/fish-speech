@@ -304,7 +304,9 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                     headers={"Content-Type": "application/msgpack"},
                     timeout=300.0
                 )
-                
+
+                logger.info(f"Received response from TTS endpoint: {response}")
+
                 # Handle unsuccessful responses
                 if response.status_code != 200:
                     try:
