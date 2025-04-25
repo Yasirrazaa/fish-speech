@@ -281,9 +281,21 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                 # The key fix: Using the text input as the reference text for proper voice cloning
                 reference_text = job_input.get('reference_text', text_input)  # Use provided reference text or input text
                 
+                # Import the ServeReferenceAudio from schema.py if not already imported
+                try:
+                    from tools.schema import ServeReferenceAudio, ServeTTSRequest
+                except ImportError:
+                    # If schema isn't imported yet, try importing it 
+                    sys.path.append("/app/fish-speech")
+                    from tools.schema import ServeReferenceAudio, ServeTTSRequest
+                
+                # Create a proper ServeReferenceAudio object
+                ref_audio = ServeReferenceAudio(audio=audio_bytes, text=reference_text)
+                
+                # Create the payload using the correct field names according to ServeTTSRequest model
                 tts_payload = {
-                    "prompt": text_input,  # Use prompt instead of text for TTS request
-                    "references": [{"audio": audio_bytes, "text": reference_text}],  # Include reference text
+                    "text": text_input,  # Use text instead of prompt for ServeTTSRequest
+                    "references": [ref_audio],
                     "format": job_input.get('format', 'wav'),
                     "streaming": False,
                     "temperature": job_input.get('temperature', 0.7),
