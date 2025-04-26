@@ -291,31 +291,44 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                 
                 # Create a proper ServeReferenceAudio object
                 ref_audio = ServeReferenceAudio(audio=audio_bytes, text=reference_text)
-                
-                # Create the payload using the correct field names according to ServeTTSRequest model
-                tts_payload = {
-                    "text": text_input,  # Use text instead of prompt for ServeTTSRequest
+
+                # --- Construct payload using ServeTTSRequest model ---
+                # Get optional parameters from job_input with defaults matching post_api.py or common usage
+                tts_data = {
+                    "text": text_input,
                     "references": [ref_audio],
-                    "format": job_input.get('format', 'wav'),
-                    "streaming": False,
-                    "temperature": job_input.get('temperature', 0.7),
-                    "top_p": job_input.get('top_p', 0.9),
-                    "repetition_penalty": job_input.get('repetition_penalty', 1.2),
-                    "max_new_tokens": job_input.get('max_new_tokens', 512),
+                    "reference_id": job_input.get('reference_id', None), # Add missing field
                     "normalize": job_input.get('normalize', True),
-                    "use_memory_cache": "on-demand",
-                    "chunk_length": 200
+                    "format": job_input.get('format', 'wav'),
+                    "mp3_bitrate": job_input.get('mp3_bitrate', 64), # Add missing field
+                    "opus_bitrate": job_input.get('opus_bitrate', -1000), # Add missing field
+                    "max_new_tokens": job_input.get('max_new_tokens', 0), # Default 0 like post_api
+                    "chunk_length": job_input.get('chunk_length', 200), # Use job_input value
+                    "top_p": job_input.get('top_p', 0.7), # Default 0.7 like post_api
+                    "repetition_penalty": job_input.get('repetition_penalty', 1.2),
+                    "temperature": job_input.get('temperature', 0.7), # Default 0.7 like post_api
+                    "streaming": job_input.get('streaming', False), # Use job_input value, default False
+                    "use_memory_cache": job_input.get('use_memory_cache', 'never'), # Use job_input value, default 'never' like post_api
+                    "seed": job_input.get('seed', None), # Add missing field
                 }
-                
+
+                # Create the Pydantic model instance
+                try:
+                    tts_request_model = ServeTTSRequest(**tts_data)
+                    logger.info(f"Constructed ServeTTSRequest model: {tts_request_model}")
+                except Exception as pydantic_err:
+                     logger.error(f"Pydantic validation error creating ServeTTSRequest: {pydantic_err}")
+                     raise ValueError(f"Input validation failed for TTS request: {pydantic_err}")
+
                 logger.info(f"Sending TTS request to endpoint for text: {text_input[:50]}...")
-                
+
                 # Use MessagePack serialization instead of JSON
                 import ormsgpack
-                
-                # Make the request to the TTS endpoint with MessagePack
+
+                # Make the request to the TTS endpoint with MessagePack, serializing the Pydantic model
                 response = await client.post(
                     "http://localhost:8080/v1/tts",
-                    content=ormsgpack.packb(tts_payload, option=ormsgpack.OPT_SERIALIZE_PYDANTIC),
+                    content=ormsgpack.packb(tts_request_model, option=ormsgpack.OPT_SERIALIZE_PYDANTIC), # Serialize the model instance
                     headers={"Content-Type": "application/msgpack"},
                     timeout=300.0
                 )
