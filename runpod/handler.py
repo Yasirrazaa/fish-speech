@@ -354,19 +354,21 @@ async def process_request(job_input: Dict[str, Any]) -> AsyncGenerator[Dict[str,
                 audio_base64 = base64.b64encode(audio_data).decode('utf-8')
                 logger.info(f"Successfully received {len(audio_data)} bytes of audio from TTS endpoint")
                 
-                # Return the complete result at once since we're not streaming in TTS mode
+                # Return the complete result using the "summary" type expected by the handler's non-streaming collector
                 yield {
-                    "output": {
+                    "type": "summary", # Add the type key
+                    "content": {       # Put the actual output data inside "content"
                         "text": text_input,
-                        "audio_base64": audio_base64,
+                        "audio_base64": audio_base64, # Keep base64 key for now, handler will rename
                         "audio_format": job_input.get('format', 'wav'),
-                        "sample_rate": 44100
+                        "sample_rate": 44100,
+                        "status": "success" # Explicitly add success status here
                     }
                 }
-                
+
                 # Clean up client
                 await client.aclose()
-                return
+                return # Return after yielding the single summary chunk
                 
             except Exception as e:
                 # Clean up client in case of error
@@ -763,7 +765,18 @@ def handler(event):
                                 result_data["output"]["audio"] = chunk["content"]
                             elif chunk["type"] == "summary":
                                 # Use summary content if available
-                                return {"output": chunk["content"]}
+                                summary_content = chunk["content"]
+                                # Check if audio_base64 exists and rename it to 'audio' for the final output structure
+                                if "audio_base64" in summary_content:
+                                     summary_content["audio"] = summary_content.pop("audio_base64")
+                                # Ensure status is present
+                                if "status" not in summary_content:
+                                     summary_content["status"] = "success"
+                                return {"output": summary_content} # Return the expected structure
+                            elif chunk["type"] == "error": # Handle potential errors yielded
+                                 return {"output": chunk["content"], "status": "error"}
+                        # If loop finishes without a summary or error, return the collected data
+                        # This path might be taken if the TTS yield isn't caught correctly
                         return result_data
                     
                     result = asyncio.get_event_loop().run_until_complete(collect_nonstreaming())
