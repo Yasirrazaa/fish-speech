@@ -21,9 +21,10 @@ def main():
     parser.add_argument("--message", type=str, default="Hello, how are you today?", help="Message to send")
     parser.add_argument("--system", type=str, help="System message")
     parser.add_argument("--system-audio", type=str, help="Path to reference audio file for voice cloning")
+    parser.add_argument("--reference-text", type=str, help="Text that matches the reference audio (for TTS mode)")
     parser.add_argument("--output-dir", type=str, default="outputs", help="Directory to save outputs")
     parser.add_argument("--conversation-id", type=str, help="Conversation ID for continuing a conversation")
-    parser.add_argument("--timeout", type=int, default=600, help="Timeout in seconds")
+    parser.add_argument("--timeout", type=int, default=1000, help="Timeout in seconds")
     parser.add_argument("--local", action="store_true", help="Test with local handler.py instead of RunPod endpoint")
     parser.add_argument("--tts", action="store_true", help="Force using TTS mode for direct voice cloning")
     parser.add_argument("--streaming", action="store_true", help="Enable streaming response")
@@ -63,8 +64,13 @@ def main():
                 audio_data = f.read()
                 test_input["input"]["system_audio"] = base64.b64encode(audio_data).decode("utf-8")
         
-        # Add TTS flag if specified
+        # For TTS mode, ensure we have all required parameters
         if args.tts:
+            if not args.reference_text or not args.system_audio:
+                print("❌ Error: TTS mode requires both --reference-text and --system-audio")
+                return
+            test_input["input"]["reference_text"] = args.reference_text
+            test_input["input"]["text"] = args.message  # Use message as the text to synthesize
             test_input["input"]["tts"] = True
         
         # Add streaming flag if specified
@@ -85,13 +91,17 @@ def main():
         subprocess.run([sys.executable, "runpod/handler.py"])
         
         # Check if output files were created
-        if (output_dir / "response.txt").exists():
-            print(f"✅ Text response saved to {output_dir / 'response.txt'}")
-            with open(output_dir / "response.txt", "r") as f:
+        # Check output files with proper format handling
+        text_file = output_dir / "response.txt"
+        audio_file = output_dir / f"response.{args.format}"
+        
+        if text_file.exists():
+            print(f"✅ Text response saved to {text_file}")
+            with open(text_file, "r") as f:
                 print(f"📝 Response: {f.read()[:100]}...")
         
-        if (output_dir / "response.wav").exists():
-            print(f"🔊 Audio response saved to {output_dir / 'response.wav'}")
+        if audio_file.exists():
+            print(f"🔊 Audio response saved to {audio_file}")
         
         return
     
@@ -118,9 +128,14 @@ def main():
         with open(args.system_audio, "rb") as f:
             audio_data = f.read()
             payload["input"]["system_audio"] = base64.b64encode(audio_data).decode("utf-8")
-    
-    # Add TTS flag if specified
+            
+    # For TTS mode, ensure we have all required parameters
     if args.tts:
+        if not args.reference_text or not args.system_audio:
+            print("❌ Error: TTS mode requires both --reference-text and --system-audio")
+            return
+        payload["input"]["reference_text"] = args.reference_text
+        payload["input"]["text"] = args.message  # Use message as the text to synthesize
         payload["input"]["tts"] = True
 
     # Add streaming flag if specified
@@ -178,12 +193,14 @@ def main():
                     print(f"📝 Text response: {output['text'][:100]}...")
                     print(f"📄 Full response saved to {output_dir / 'response.txt'}")
                 
-                # Save audio response if present
-                if "audio_base64" in output:
-                    audio_bytes = base64.b64decode(output["audio_base64"])
-                    with open(output_dir / "response.wav", "wb") as f:
+                # Save audio response if present (handle both audio_base64 and audio keys)
+                audio_content = output["output"].get("audio_base64") or output['output'].get("audio")
+                if audio_content:
+                    audio_bytes = base64.b64decode(audio_content)
+                    output_file = output_dir / f"response.{args.format}"
+                    with open(output_file, "wb") as f:
                         f.write(audio_bytes)
-                    print(f"🔊 Audio response saved to {output_dir / 'response.wav'}")
+                    print(f"🔊 Audio response saved to {output_file}")
                 
                 # Save full response
                 with open(output_dir / "response.json", "w") as f:
