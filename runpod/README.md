@@ -70,22 +70,34 @@ def clone_voice_agent(text, reference_audio_path):
 
 ### Direct TTS Voice Cloning (Recommended for Pure Voice Cloning)
 ```python
-def clone_voice_tts(text, reference_audio_path):
+def clone_voice_tts(text, reference_audio_path, reference_text):
+    """
+    Clone a voice using direct TTS synthesis.
+    
+    Args:
+        text: The text to be spoken in the cloned voice
+        reference_audio_path: Path to the reference audio file
+        reference_text: Text that matches the reference audio content (required)
+    """
     # Read and encode reference audio
     with open(reference_audio_path, "rb") as f:
         audio_bytes = f.read()
     audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
     
+    if not reference_text:
+        raise ValueError("reference_text is required for TTS voice cloning")
+    
     response = requests.post(
         ENDPOINT,
         json={
             "input": {
-                "message": text,
-                "system_audio": audio_base64,  # Voice reference
-                "tts": True,  # Enable direct TTS mode
+                "text": text,                   # Text to synthesize
+                "reference_text": reference_text, # Text matching the reference audio (required)
+                "system_audio": audio_base64,    # Voice reference
+                "tts": True,                     # Enable direct TTS mode
                 "format": "wav",
-                "temperature": 0.7,  # Optional: Control variability
-                "normalize": True    # Optional: Improve pronunciation of numbers
+                "temperature": 0.7,              # Optional: Control variability
+                "normalize": True                # Optional: Improve pronunciation of numbers
             }
         },
         headers={"Authorization": f"Bearer {API_KEY}"}
@@ -152,7 +164,10 @@ python runpod/test_client.py --endpoint YOUR_ENDPOINT_ID --api-key YOUR_API_KEY 
 
 # Test with direct TTS mode (recommended for pure voice cloning)
 python runpod/test_client.py --endpoint YOUR_ENDPOINT_ID --api-key YOUR_API_KEY \
-  --message "Text to be spoken in the reference voice" --system-audio path/to/reference.wav --tts
+  --reference-text "Text matching the reference audio" \
+  --message "Text to be spoken in the reference voice" \
+  --system-audio path/to/reference.wav \
+  --tts
 
 # Test locally
 python runpod/test_client.py --local --message "Hello world" --system-audio path/to/reference.wav
@@ -213,10 +228,12 @@ history = response.json()["output"]["history"]
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| message | string | Yes | Text to synthesize |
+| message | string | Yes (Agent) | Input text for agent mode |
+| text | string | Yes (TTS) | Text to synthesize in TTS mode |
+| reference_text | string | Yes (TTS) | Text that matches the reference audio content |
 | system_message | string | No | Assistant behavior prompt |
 | tts | bool | No | Enable direct text-to-speech synthesis (default: false) |
-| system_audio | string | No | Base64 reference audio |
+| system_audio | string | Yes (TTS) | Base64 reference audio for voice cloning |
 | streaming | bool | No | Enable streaming (default: true) |
 | format | string | No | 'wav' (streaming)/'mp3'/'flac' |
 | conversation_id | string | No | Session identifier |
